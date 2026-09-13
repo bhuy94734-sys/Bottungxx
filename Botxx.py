@@ -21,7 +21,7 @@ bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
 
-# ==================== KHỞI TẠO DATABASE CHUNG TRỰC TIẾP ====================
+# ==================== KHỞI TẠO DATABASE CHUNG ====================
 DB_FILE = "shared_game.db"
 
 def init_db():
@@ -259,15 +259,34 @@ _____________________
 
     await asyncio.sleep(2)
 
-async def process_user_bet(message: types.Message, bet_type: str):
+# ==================== XỬ LÝ LỆNH CƯỢC TRỰC TIẾP TRONG NHÓM ====================
+@dp.message(F.text.regexp(r"^/(Tai|Xiu|C|L)(\s+\d+)?$"))
+async def handle_bet_commands(message: types.Message):
+  text = message.text.strip()
+  parts = text.split()
+  cmd = parts[0][1:].capitalize()
+  
+  if cmd == "Tai":
+    bet_type = "Tai"
+  elif cmd == "Xiu":
+    bet_type = "Xiu"
+  elif cmd == "C":
+    bet_type = "Chan"
+  elif cmd == "L":
+    bet_type = "Le"
+  else:
+    return
+  
+  await process_user_bet_direct(message, bet_type, parts)
+
+async def process_user_bet_direct(message: types.Message, bet_type: str, args: list):
   global game_phase, current_bets
   if game_phase != "BETTING":
     await message.reply("⚠️ Đã hết thời gian đặt cược phiên này!")
     return
 
-  args = message.text.split()
   if len(args) < 2:
-    await message.reply("⚠️ Sai cú pháp! Ví dụ: `/Tai 50000`", parse_mode=ParseMode.HTML)
+    await message.reply("⚠️ Vui lòng nhập số tiền cược! Ví dụ: `/Tai 50000`", parse_mode=ParseMode.HTML)
     return
 
   try:
@@ -278,16 +297,15 @@ async def process_user_bet(message: types.Message, bet_type: str):
     return
 
   user = message.from_user
-  user_data = get_user(user.id, user.username or user.first_name)
+  user_data = get_user(user.id, user.username or user.full_name)
   current_bal = user_data["balance"]
 
   if current_bal < amount:
     await message.reply(f"❌ Số dư không đủ! Số dư hiện tại: <b>{current_bal:,.0f} VNĐ</b>", parse_mode=ParseMode.HTML)
     return
 
-  # Trừ tiền trực tiếp vào database
   update_balance(user.id, -amount)
-  updated_data = get_user(user.id, user.username or user.first_name)
+  updated_data = get_user(user.id, user.username or user.full_name)
   new_balance = updated_data["balance"]
 
   if user.id not in current_bets: current_bets[user.id] = {}
@@ -295,19 +313,10 @@ async def process_user_bet(message: types.Message, bet_type: str):
 
   await message.reply(f"✅ Đã cược <b>{amount:,.0f} VNĐ</b> vào <b>{bet_type.upper()}</b>!\n💰 Số dư còn lại: <b>{new_balance:,.0f} VNĐ</b>", parse_mode=ParseMode.HTML)
 
-@dp.message(Command("Tai"))
-async def cmd_tai(message: types.Message): await process_user_bet(message, "Tai")
-@dp.message(Command("Xiu"))
-async def cmd_xiu(message: types.Message): await process_user_bet(message, "Xiu")
-@dp.message(Command("C"))
-async def cmd_chan(message: types.Message): await process_user_bet(message, "Chan")
-@dp.message(Command("L"))
-async def cmd_le(message: types.Message): await process_user_bet(message, "Le")
-
 @dp.message(Command("sodu"))
 async def cmd_sodu(message: types.Message):
   user = message.from_user
-  user_data = get_user(user.id, user.username or user.first_name)
+  user_data = get_user(user.id, user.username or user.full_name)
   await message.reply(f"💰 Số dư: <b>{user_data['balance']:,.0f} VNĐ</b>", parse_mode=ParseMode.HTML)
 
 @dp.message(Command("start"))
@@ -317,26 +326,19 @@ async def cmd_start(message: types.Message):
 @dp.callback_query(F.data == "btn_nap_tien")
 async def callback_nap(callback: types.CallbackQuery):
   user = callback.from_user
-  user_data = get_user(user.id, user.username or user.first_name)
-  
-  # Tạo mã QR nạp tiền tự động và đồng thời gửi thông báo về cho Admin!
-  amount = 50000  # Mặc định gợi ý mẫu hoặc cho khách chọn, ở đây ta tạo nội dung hướng dẫn kèm mã QR chuẩn
   random_content = f"NAP{user.id}{random.randint(100, 999)}"
   qr_url = f"https://img.vietqr.io/image/970422-2105200999999-compact2.jpg?amount=50000&addInfo={random_content}&accountName=KHONG%20QUOC%20BAO"
   
   caption = f"""🏦 <b>HƯỚNG DẪN NẠP TIỀN TỰ ĐỘNG</b>
 Số tài khoản: <code>2105200999999</code> (MB Bank)
 Chủ TK: <b>KHONG QUOC BAO</b>
-Nội dung chuyển khoản bắt buộc: <code>{random_content}</code>
-
-⚠️ <i>Sau khi chuyển khoản, hệ thống sẽ tự động duyệt hoặc bạn có thể báo admin nếu cần hỗ trợ gấp.</i>"""
+Nội dung chuyển khoản bắt buộc: <code>{random_content}</code>"""
 
   try:
     await callback.message.answer_photo(photo=qr_url, caption=caption, parse_mode=ParseMode.HTML)
   except Exception:
     await callback.message.answer(caption, parse_mode=ParseMode.HTML)
 
-  # Gửi thông báo yêu cầu nạp tiền trực tiếp về cho Admin ID của bạn
   admin_msg = f"""🔔 <b>CÓ YÊU CẦU NẠP TIỀN MỚI TỪ BOT XÚC XẮC!</b>
 👤 Khách: @{user.username or user.full_name} (ID: <code>{user.id}</code>)
 📝 Nội dung mã: <code>{random_content}</code>"""
@@ -361,7 +363,7 @@ async def start_web_server():
 async def main():
   await start_web_server()
   asyncio.create_task(run_game_loop())
-  async dp.start_polling(bot)
+  await dp.start_polling(bot)
 
 if __name__ == "__main__":
-  main()
+  asyncio.run(main())
