@@ -13,7 +13,8 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 # Lấy Token và Admin ID từ biến môi trường trên Render hoặc điền trực tiếp
 TOKEN = os.getenv("BOT_TOKEN", "8554416932:AAGhOIgzgHGYTTd9H3ghd5HApxerB-9e20U")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "8985238179"))
-GROUP_CHAT_ID = int(os.getenv("GROUP_CHAT_ID", "-100123456789"))
+GROUP_CHAT_ID = int(os.getenv("GROUP_CHAT_ID", "-1004374137941"))
+
 
 logging.basicConfig(level=logging.INFO)
 
