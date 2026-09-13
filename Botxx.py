@@ -4,6 +4,7 @@ import os
 import random
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F, types
+from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.filters import Command
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -15,7 +16,10 @@ ADMIN_ID = int(os.getenv("ADMIN_ID", "8985238179"))
 GROUP_CHAT_ID = int(os.getenv("GROUP_CHAT_ID", "-100123456789"))
 
 logging.basicConfig(level=logging.INFO)
-bot = Bot(token=TOKEN, parse_mode=ParseMode.HTML)
+
+# Khởi tạo Bot với chuẩn cấu hình mặc định mới của aiogram >= 3.7.0
+bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+
 storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
 
