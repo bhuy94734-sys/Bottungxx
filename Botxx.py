@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import random
+import sqlite3
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.client.default import DefaultBotProperties
@@ -9,9 +10,6 @@ from aiogram.enums import ParseMode
 from aiogram.filters import Command
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-
-# Import Database dùng chung
-from database import db
 
 TOKEN = os.getenv("BOT_TOKEN", "8554416932:AAGhOIgzgHGYTTd9H3ghd5HApxerB-9e20U")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "8985238179"))
@@ -23,6 +21,51 @@ bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
 
+# ==================== KHỞI TẠO DATABASE CHUNG TRỰC TIẾP ====================
+DB_FILE = "shared_game.db"
+
+def init_db():
+  conn = sqlite3.connect(DB_FILE)
+  cursor = conn.cursor()
+  cursor.execute("""
+      CREATE TABLE IF NOT EXISTS users (
+          user_id INTEGER PRIMARY KEY,
+          username TEXT,
+          balance REAL DEFAULT 0.0,
+          total_bet REAL DEFAULT 0.0
+      )
+  """)
+  conn.commit()
+  conn.close()
+
+init_db()
+
+def get_user(user_id: int, username: str):
+  conn = sqlite3.connect(DB_FILE)
+  cursor = conn.cursor()
+  cursor.execute("SELECT user_id, username, balance, total_bet FROM users WHERE user_id = ?", (user_id,))
+  row = cursor.fetchone()
+  if not row:
+    cursor.execute("INSERT INTO users (user_id, username, balance, total_bet) VALUES (?, ?, 0.0, 0.0)", (user_id, username))
+    conn.commit()
+    row = (user_id, username, 0.0, 0.0)
+  else:
+    cursor.execute("UPDATE users SET username = ? WHERE user_id = ?", (username, user_id))
+    conn.commit()
+  conn.close()
+  return {"user_id": row[0], "username": row[1], "balance": row[2], "total_bet": row[3]}
+
+def update_balance(user_id: int, amount: float):
+  conn = sqlite3.connect(DB_FILE)
+  cursor = conn.cursor()
+  cursor.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
+  row = cursor.fetchone()
+  if row:
+    new_bal = row[0] + amount
+    cursor.execute("UPDATE users SET balance = ? WHERE user_id = ?", (new_bal, user_id))
+    conn.commit()
+  conn.close()
+
 # Trò chơi và Trạng thái hệ thống
 current_session = 105021
 current_jackpot = 300000.0
@@ -31,7 +74,7 @@ recent_chan_le = []
 game_running = True
 game_phase = "BETTING"
 countdown_timer = 30
-current_bets = {}  # { user_id: {"Tai": x, "Xiu": y, "Chan": z, "Le": t} }
+current_bets = {}
 
 def get_dice_emoji(val: int) -> str:
   return ["⚀", "⚁", "⚂", "⚃", "⚄", "⚅"][val - 1]
@@ -93,9 +136,7 @@ async def run_game_loop():
 🔴 <b>Tài:</b> <code>{t_tai:,.0f} VNĐ</code>
 🔵 <b>Xỉu:</b> <code>{t_xiu:,.0f} VNĐ</code>
 ⚫️ <b>Chẵn:</b> <code>{t_chan:,.0f} VNĐ</code>
-⚪️ <b>Lẻ:</b> <code>{t_le:,.0f} VNĐ</code>
-
-👉 <i>Cú pháp: /Tai, /Xiu, /C, /L [số tiền]</i>"""
+⚪️ <b>Lẻ:</b> <code>{t_le:,.0f} VNĐ</code>"""
         try:
           await start_msg.edit_text(update_text, reply_markup=build_main_keyboard())
         except Exception:
@@ -176,9 +217,9 @@ async def run_game_loop():
                 lose_details.append("Lẻ")
 
           if user_win_amount > 0:
-            db.update_balance(uid, user_win_amount)
+            update_balance(uid, user_win_amount)
 
-          user_info = db.get_user(uid, str(uid))
+          user_info = get_user(uid, str(uid))
           current_bal = user_info["balance"]
 
           try:
@@ -237,16 +278,16 @@ async def process_user_bet(message: types.Message, bet_type: str):
     return
 
   user = message.from_user
-  user_data = db.get_user(user.id, user.username or user.first_name)
+  user_data = get_user(user.id, user.username or user.first_name)
   current_bal = user_data["balance"]
 
   if current_bal < amount:
     await message.reply(f"❌ Số dư không đủ! Số dư hiện tại: <b>{current_bal:,.0f} VNĐ</b>", parse_mode=ParseMode.HTML)
     return
 
-  # Trừ tiền trực tiếp vào database chung
-  db.update_balance(user.id, -amount)
-  updated_data = db.get_user(user.id, user.username or user.first_name)
+  # Trừ tiền trực tiếp vào database
+  update_balance(user.id, -amount)
+  updated_data = get_user(user.id, user.username or user.first_name)
   new_balance = updated_data["balance"]
 
   if user.id not in current_bets: current_bets[user.id] = {}
@@ -266,7 +307,7 @@ async def cmd_le(message: types.Message): await process_user_bet(message, "Le")
 @dp.message(Command("sodu"))
 async def cmd_sodu(message: types.Message):
   user = message.from_user
-  user_data = db.get_user(user.id, user.username or user.first_name)
+  user_data = get_user(user.id, user.username or user.first_name)
   await message.reply(f"💰 Số dư: <b>{user_data['balance']:,.0f} VNĐ</b>", parse_mode=ParseMode.HTML)
 
 @dp.message(Command("start"))
@@ -275,11 +316,40 @@ async def cmd_start(message: types.Message):
 
 @dp.callback_query(F.data == "btn_nap_tien")
 async def callback_nap(callback: types.CallbackQuery):
-  await callback.message.answer("💲 Để nạp tiền, vui lòng sử dụng Bot chính (@BTV88_bot) để thao tác nạp.")
-  await callback.answer()
+  user = callback.from_user
+  user_data = get_user(user.id, user.username or user.first_name)
+  
+  # Tạo mã QR nạp tiền tự động và đồng thời gửi thông báo về cho Admin!
+  amount = 50000  # Mặc định gợi ý mẫu hoặc cho khách chọn, ở đây ta tạo nội dung hướng dẫn kèm mã QR chuẩn
+  random_content = f"NAP{user.id}{random.randint(100, 999)}"
+  qr_url = f"https://img.vietqr.io/image/970422-2105200999999-compact2.jpg?amount=50000&addInfo={random_content}&accountName=KHONG%20QUOC%20BAO"
+  
+  caption = f"""🏦 <b>HƯỚNG DẪN NẠP TIỀN TỰ ĐỘNG</b>
+Số tài khoản: <code>2105200999999</code> (MB Bank)
+Chủ TK: <b>KHONG QUOC BAO</b>
+Nội dung chuyển khoản bắt buộc: <code>{random_content}</code>
+
+⚠️ <i>Sau khi chuyển khoản, hệ thống sẽ tự động duyệt hoặc bạn có thể báo admin nếu cần hỗ trợ gấp.</i>"""
+
+  try:
+    await callback.message.answer_photo(photo=qr_url, caption=caption, parse_mode=ParseMode.HTML)
+  except Exception:
+    await callback.message.answer(caption, parse_mode=ParseMode.HTML)
+
+  # Gửi thông báo yêu cầu nạp tiền trực tiếp về cho Admin ID của bạn
+  admin_msg = f"""🔔 <b>CÓ YÊU CẦU NẠP TIỀN MỚI TỪ BOT XÚC XẮC!</b>
+👤 Khách: @{user.username or user.full_name} (ID: <code>{user.id}</code>)
+📝 Nội dung mã: <code>{random_content}</code>"""
+
+  try:
+    await bot.send_message(chat_id=ADMIN_ID, text=admin_msg, parse_mode=ParseMode.HTML)
+  except Exception as e:
+    logging.error(f"Không gửi được thông báo nạp cho admin: {e}")
+
+  await callback.answer("Đã tạo thông tin nạp tiền và báo Admin!")
 
 async def handle_ping(request):
-  return web.Response(text="Dice Bot Running!")
+  return web.Response(text="Dice Bot Running perfectly!")
 
 async def start_web_server():
   app = web.Application()
@@ -291,7 +361,7 @@ async def start_web_server():
 async def main():
   await start_web_server()
   asyncio.create_task(run_game_loop())
-  await dp.start_polling(bot)
+  async dp.start_polling(bot)
 
 if __name__ == "__main__":
   main()
