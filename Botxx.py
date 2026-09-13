@@ -8,24 +8,23 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.filters import Command
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
 
-# Lấy Token và Admin ID từ biến môi trường trên Render hoặc điền trực tiếp
+# Lấy Token và Admin ID từ biến môi trường hoặc cấu hình sẵn
 TOKEN = os.getenv("BOT_TOKEN", "8554416932:AAGhOIgzgHGYTTd9H3ghd5HApxerB-9e20U")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "8985238179"))
 GROUP_CHAT_ID = int(os.getenv("GROUP_CHAT_ID", "-1004374137941"))
 
-
 logging.basicConfig(level=logging.INFO)
 
-# Khởi tạo Bot với chuẩn cấu hình mặc định mới của aiogram >= 3.7.0
+# Khởi tạo Bot với chuẩn cấu hình aiogram >= 3.7.0
 bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 
 storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
 
 # Biến trạng thái trò chơi và tài chính
-current_session = 105020
+current_session = 105021
 current_jackpot = 300000.0  # Hũ mặc định khởi tạo là 300,000đ
 recent_tai_xiu = []
 recent_chan_le = []
@@ -61,35 +60,47 @@ async def run_game_loop():
   await asyncio.sleep(5)
   while True:
     if game_running:
-      d1 = random.randint(1, 6)
-      d2 = random.randint(1, 6)
-      d3 = random.randint(1, 6)
-      total = d1 + d2 + d3
+      try:
+        # Gửi lần lượt 3 hiệu ứng xúc xắc hoạt ảnh (dice animation) lên Telegram
+        dice1_msg = await bot.send_dice(chat_id=GROUP_CHAT_ID, emoji="🎲")
+        await asyncio.sleep(0.5)
+        dice2_msg = await bot.send_dice(chat_id=GROUP_CHAT_ID, emoji="🎲")
+        await asyncio.sleep(0.5)
+        dice3_msg = await bot.send_dice(chat_id=GROUP_CHAT_ID, emoji="🎲")
+        
+        # Đợi 3 giây để hiệu ứng xúc xắc dừng lại hẳn trên Telegram
+        await asyncio.sleep(3.5)
 
-      if total <= 10:
-        tx_result = "Xỉu"
-        tx_code = "X"
-      else:
-        tx_result = "Tài"
-        tx_code = "T"
+        # Lấy kết quả điểm thực tế từ 3 con xúc xắc hoạt ảnh
+        d1 = dice1_msg.dice.value
+        d2 = dice2_msg.dice.value
+        d3 = dice3_msg.dice.value
+        total = d1 + d2 + d3
 
-      cl_result = "Chẵn" if total % 2 == 0 else "Lẻ"
-      cl_code = "C" if total % 2 == 0 else "L"
+        if total <= 10:
+          tx_result = "Xỉu"
+          tx_code = "X"
+        else:
+          tx_result = "Tài"
+          tx_code = "T"
 
-      recent_tai_xiu.append(tx_code)
-      if len(recent_tai_xiu) > 12:
-        recent_tai_xiu.pop(0)
+        cl_result = "Chẵn" if total % 2 == 0 else "Lẻ"
+        cl_code = "C" if total % 2 == 0 else "L"
 
-      recent_chan_le.append(cl_code)
-      if len(recent_chan_le) > 12:
-        recent_chan_le.pop(0)
+        recent_tai_xiu.append(tx_code)
+        if len(recent_tai_xiu) > 12:
+          recent_tai_xiu.pop(0)
 
-      tong_thang = random.randint(500000, 3000000)
-      tong_thua = random.randint(500000, 3000000)
-      cong_hu = tong_thua * 0.005
-      current_jackpot += cong_hu
+        recent_chan_le.append(cl_code)
+        if len(recent_chan_le) > 12:
+          recent_chan_le.pop(0)
 
-      text = f"""KẾT QUẢ XX PHIÊN (#{current_session})
+        tong_thang = random.randint(500000, 3000000)
+        tong_thua = random.randint(500000, 3000000)
+        cong_hu = tong_thua * 0.005
+        current_jackpot += cong_hu
+
+        text = f"""KẾT QUẢ XX PHIÊN (#{current_session})
 
 _____________________
 |   {get_dice_emoji(d1)} {get_dice_emoji(d2)} {get_dice_emoji(d3)} ➡️ {total} điểm → {tx_result} | {cl_result}
@@ -104,14 +115,14 @@ _____________________
 
 {build_statistics_string()}"""
 
-      try:
         await bot.send_message(
             chat_id=GROUP_CHAT_ID, text=text, reply_markup=build_main_keyboard()
         )
-      except Exception as e:
-        logging.error(f"Lỗi gửi kết quả game: {e}")
+        current_session += 1
 
-      current_session += 1
+      except Exception as e:
+        logging.error(f"Lỗi vòng lặp game: {e}")
+
     await asyncio.sleep(30)
 
 
@@ -242,7 +253,6 @@ async def process_deposit_amount(callback: types.CallbackQuery):
   username = callback.from_user.username or callback.from_user.full_name
   random_content = f"NAP{user_id}{random.randint(100, 999)}"
 
-  # Lưu hoặc cập nhật người chơi tạm thời vào danh sách người chơi
   if user_id not in players_in_session:
     players_in_session[user_id] = {"balance": 0.0, "username": username}
 
@@ -302,7 +312,6 @@ async def admin_handle_deposit(callback: types.CallbackQuery):
   amount = float(parts[2])
 
   if action == "approve":
-    # Cộng dồn tiền vào số dư của khách
     if user_id in players_in_session:
       players_in_session[user_id]["balance"] += amount
     else:
